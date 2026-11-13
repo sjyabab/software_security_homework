@@ -1,47 +1,90 @@
-# 软件与系统安全实验 1A 网络嗅探器
+# 实验 1B 安全文件传输
 
-这个 Windows 图形工具可以采集本机网络数据包，也可以读取经典 PCAP 文件。界面同时显示包列表、协议字段和十六进制字节。
+使用 Python 标准库实现的 SFT1 文件传输协议、双向 TLS 服务端和 Tkinter 图形客户端。
 
-## 启动
+## 功能
 
-需要 Windows 和自带 Tkinter 的 Python 3.10 或更新版本。离线查看只用 Python 标准库。实时抓包还需要安装 [Npcap](https://npcap.com/#download)。
+- 多用户证书身份认证及独立文件空间。
+- 持续 TCP/TLS 连接，5 秒应用层心跳和 SO_KEEPALIVE。
+- 上传与下载采用 SHA-256 校验、临时文件和原子替换。
+- 上传和下载断点续传，校验已传前缀，服务器重启后可恢复上传。
+- GUI 两路并行任务，可同时上传和下载，支持暂停及继续。
+- 每用户、每方向共享带宽配额，Alice 为 1 MiB/s，Bob 为 256 KiB/s。
+- 有界帧解析、连接与请求频率限制、握手超时、文件数和空间上限。
 
-在仓库目录运行
+## 环境
 
-```powershell
-python -B sniffer.py
-```
+Windows，Python 3.10 或更新版本，含 Tkinter。应用无需 pip 依赖。
+初始化证书需要 OpenSSL 3.x。程序先查找 PATH 中的 openssl，也会查找 Git for Windows 安装路径中的 OpenSSL。
 
-## 离线查看
+## 快速启动
 
-1. 点击「加载示例」，载入 20 个合成数据包。
-2. 使用「显示筛选」查看 HTTP、TCP、UDP、IPv4、IPv6、ICMP、ICMPv6、DNS、ARP 或 VLAN 数据包。
-3. 选中 TCP 包后点击「追踪所选 TCP 流」，查看这一对 IP 地址和端口之间的双向报文。摘要标记报文方向。
-4. 「导出 PCAP」保存当前保留的全部数据包。「打开 PCAP」可以重新读取导出的经典 PCAP 文件。
-
-## 回环抓包
-
-在一个空目录启动绑定于本机回环地址的 HTTP 服务。
+在源码目录运行以下命令。
 
 ```powershell
-python -m http.server 8765 --bind 127.0.0.1
+python -B launch_demo.py
 ```
 
-在图形界面点击「刷新网卡」，选择 Npcap 回环适配器，填写捕获 BPF `tcp port 8765` 并开始抓包。另开一个终端发送请求。
+首次运行自动创建 `runtime`，生成本机独立 CA、服务器及 Alice/Bob 证书，设置运行目录 ACL，启动回环服务器并打开 GUI。
+
+1. 点击 Alice 或 Bob，点击连接。
+2. 上传 `runtime/samples` 中的一个或多个文件。
+3. 选中传输任务，点击暂停所选，再点击继续所选。
+4. 选中服务器文件，点击下载所选文件并选择下载目录。
+5. 上传与下载任务可并行执行。关闭此演示窗口会停止其启动的服务器。
+
+初始化只接受尚不存在的目录，避免覆盖已有证书及数据。如果默认端口 8766 被占用，可先停止旧实例，或手动初始化时指定其他端口。
+
+## 分开运行
+
+在三个终端中分别启动初始化、服务端和客户端。初始化执行一次。
 
 ```powershell
-curl.exe --noproxy '*' http://127.0.0.1:8765/
+python -B setup_demo.py --runtime runtime --port 8766
+python -B server.py --config runtime/server/config.json
+python -B gui.py --profile runtime/clients/alice/profile.json
 ```
 
-回到界面点击「停止」。捕获 BPF 决定哪些包进入程序。显示筛选作用于已经保留的数据，可随时切换。
+另一个客户端可以选择 `runtime/clients/bob/profile.json`。跨主机使用时，需要同时配置服务端监听地址、证书 SAN、客户端主机名及防火墙。默认演示绑定 `127.0.0.1`，证书覆盖 localhost 与回环地址。
 
-## 源码与范围
+## 自动化测试
 
-| 文件 | 职责 |
+```powershell
+python -B test_system.py
+```
+
+测试独立生成临时证书，通过真实 TCP/TLS 验证文件往返、服务器重启续传、下载续传、用户隔离、路径校验、错误证书拒绝、拆包粘包、原子替换、同名冲突、并发限速、连接上限、保活、握手超时及 Windows 并发小文件收尾。测试结束后清理临时目录。
+
+## 文件结构
+
+| 文件 | 用途 |
 | --- | --- |
-| `sniffer.py` | 图形界面、筛选和流追踪 |
-| `capture.py` | Npcap 接口及经典 PCAP 导入导出 |
-| `decoder.py` | 以太网与 Npcap 回环帧的协议解析 |
-| `demo_data.py` | 内置合成样例 |
+| `protocol.py` | 20 字节帧头、JSON 与二进制载荷收发、输入校验 |
+| `server.py` | 双向 TLS、身份授权、用户空间、资源限制与限速 |
+| `client.py` | 连接保活、完整性校验、上传与下载续传 |
+| `gui.py` | 图形客户端与并行任务队列 |
+| `setup_demo.py` | 生成本机 PKI、用户配置与样例 |
+| `secure_runtime.ps1` | Windows 运行目录 ACL |
+| `launch_demo.py` | 一键本机演示入口 |
+| `test_system.py` | 真实 TLS 集成测试 |
 
-程序从单个 TCP 段识别 HTTP/1.x 起始行。流追踪按端点归组，不重组 TCP 字节流，也不解密 TLS。界面最多保留 3,000 包，导入另有 64 MiB 的捕获数据上限。
+## 协议与限制
+
+SFT1 帧头按网络字节序编码 Magic、版本、操作码、标志、请求编号、JSON 长度和载荷长度。操作包含 HELLO、PING、LIST、PUT_BEGIN、PUT_CHUNK、PUT_FINISH、GET_BEGIN、GET_CHUNK、RELEASE 和 QUIT。文件传输完成后连接继续保留。
+
+- 单帧 JSON 上限 16 KiB，数据块上限 64 KiB，单文件上限 64 MiB。
+- 每用户空间 256 MiB，文件和待传名额上限 256。
+- 默认全局最多 16 个连接，单 IP 最多 12 个，单用户最多 4 个。
+- 握手期限 4 秒，整帧期限 15 秒，单连接每秒最多 150 次请求。
+- 每个 IP 每 60 秒最多发起 30 次新连接。
+- 支持单层文件名，同名文件在传输时使用排他锁。
+
+应用层限制可减少资源耗尽风险。公网链路型 DDoS 需要额外网络层防护。证书指纹白名单在服务器启动时加载，修改用户配置或撤销证书后需重启服务。
+
+`runtime/authority` 保存 CA 私钥，服务器运行只需要 `runtime/server` 中的配置和证书。用户只应获得自己的客户端配置与凭据。生成的私钥、证书、断点和运行时数据已由 `.gitignore` 排除。
+
+## 参考
+
+- [Python ssl](https://docs.python.org/3/library/ssl.html)
+- [OpenSSL req](https://docs.openssl.org/3.5/man1/openssl-req/)
+- [Microsoft icacls](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/icacls)
